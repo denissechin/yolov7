@@ -137,7 +137,7 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
                         padh=pad[1],
                     )
             if labels.size:  # normalized xywh to pixel xyxy format
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
+                labels[:, 2:] = xywhn2xyxy(labels[:, 2:], ratio[0] * w, ratio[1] * h, padw=pad[0], padh=pad[1])
 
             if self.augment:
                 img, labels, segments = random_perspective(
@@ -154,7 +154,7 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
 
         nl = len(labels)  # number of labels
         if nl:
-            labels[:, 1:5] = xyxy2xywhn(labels[:, 1:5], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
+            labels[:, 2:6] = xyxy2xywhn(labels[:, 2:6], w=img.shape[1], h=img.shape[0], clip=True, eps=1e-3)
             if self.overlap:
                 masks, sorted_idx = polygons2masks_overlap(img.shape[:2],
                                                            segments,
@@ -172,8 +172,8 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             # Albumentations
             # there are some augmentation that won't change boxes and masks,
             # so just be it for now.
-            img, labels = self.albumentations(img, labels)
-            nl = len(labels)  # update after albumentations
+            # img, labels = self.albumentations(img, labels)
+            # nl = len(labels)  # update after albumentations
 
             # HSV color-space
             augment_hsv(img, hgain=hyp["hsv_h"], sgain=hyp["hsv_s"], vgain=hyp["hsv_v"])
@@ -182,19 +182,19 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             if random.random() < hyp["flipud"]:
                 img = np.flipud(img)
                 if nl:
-                    labels[:, 2] = 1 - labels[:, 2]
+                    labels[:, 3] = 1 - labels[:, 3]
                     masks = torch.flip(masks, dims=[1])
 
             # Flip left-right
             if random.random() < hyp["fliplr"]:
                 img = np.fliplr(img)
                 if nl:
-                    labels[:, 1] = 1 - labels[:, 1]
+                    labels[:, 2] = 1 - labels[:, 2]
                     masks = torch.flip(masks, dims=[2])
 
             # Cutouts  # labels = cutout(img, labels, p=0.5)
 
-        labels_out = torch.zeros((nl, 6))
+        labels_out = torch.zeros((nl, 7))
         if nl:
             labels_out[:, 1:] = torch.from_numpy(labels)
 
@@ -238,14 +238,14 @@ class LoadImagesAndLabelsAndMasks(LoadImagesAndLabels):  # for training/testing
             labels, segments = self.labels[index].copy(), self.segments[index].copy()
 
             if labels.size:
-                labels[:, 1:] = xywhn2xyxy(labels[:, 1:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
+                labels[:, 2:] = xywhn2xyxy(labels[:, 2:], w, h, padw, padh)  # normalized xywh to pixel xyxy format
                 segments = [xyn2xy(x, w, h, padw, padh) for x in segments]
             labels4.append(labels)
             segments4.extend(segments)
 
         # Concat/clip labels
         labels4 = np.concatenate(labels4, 0)
-        for x in (labels4[:, 1:], *segments4):
+        for x in (labels4[:, 2:], *segments4):
             np.clip(x, 0, 2 * s, out=x)  # clip when using random_perspective()
         # img4, labels4 = replicate(img4, labels4)  # replicate
 

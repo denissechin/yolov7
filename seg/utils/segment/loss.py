@@ -36,6 +36,8 @@ class ComputeLoss:
         self.BCEcls, self.BCEobj, self.gr, self.hyp, self.autobalance = BCEcls, BCEobj, 1.0, h, autobalance
         self.na = m.na  # number of anchors
         self.nc = m.nc  # number of classes
+        self.nc1 = 2
+        self.nc2 = 4
         self.nl = m.nl  # number of layers
         self.nm = m.nm  # number of masks
         self.anchors = m.anchors
@@ -44,11 +46,12 @@ class ComputeLoss:
     def __call__(self, preds, targets, masks):  # predictions, targets, model
         p, proto = preds
         bs, nm, mask_h, mask_w = proto.shape  # batch size, number of masks, mask height, mask width
-        lcls = torch.zeros(1, device=self.device)
+        lcls1 = torch.zeros(1, device=self.device)
+        lcls2 = torch.zeros(1, device=self.device)
         lbox = torch.zeros(1, device=self.device)
         lobj = torch.zeros(1, device=self.device)
         lseg = torch.zeros(1, device=self.device)
-        tcls, tbox, indices, anchors, tidxs, xywhn = self.build_targets(p, targets)  # targets
+        tcls1, tcls2, tbox, indices, anchors, tidxs, xywhn = self.build_targets(p, targets)  # targets
 
         # Losses
         for i, pi in enumerate(p):  # layer index, layer predictions
@@ -57,7 +60,7 @@ class ComputeLoss:
 
             n = b.shape[0]  # number of targets
             if n:
-                pxy, pwh, _, pcls, pmask = pi[b, a, gj, gi].split((2, 2, 1, self.nc, nm), 1)  # subset of predictions
+                pxy, pwh, _, pcls1, pcls2, pmask = pi[b, a, gj, gi].split((2, 2, 1, self.nc1, self.nc2, nm), 1)  # subset of predictions
 
                 # Box regression
                 pxy = pxy.sigmoid() * 2 - 0.5
@@ -76,10 +79,15 @@ class ComputeLoss:
                 tobj[b, a, gj, gi] = iou  # iou ratio
 
                 # Classification
-                if self.nc > 1:  # cls loss (only if multiple classes)
-                    t = torch.full_like(pcls, self.cn, device=self.device)  # targets
-                    t[range(n), tcls[i]] = self.cp
-                    lcls += self.BCEcls(pcls, t)  # BCE
+                if self.nc1 > 1:  # cls loss (only if multiple classes)
+                    t = torch.full_like(pcls1, self.cn, device=self.device)  # targets
+                    t[range(n), tcls1[i]] = self.cp
+                    lcls1 += self.BCEcls(pcls1, t)  # BCE
+
+                if self.nc2 > 1:  # cls loss (only if multiple classes)
+                    t = torch.full_like(pcls2, self.cn, device=self.device)  # targets
+                    t[range(n), tcls2[i]] = self.cp
+                    lcls2 += self.BCEcls(pcls2, t)  # BCE
 
                 # Mask regression
                 if tuple(masks.shape[-2:]) != (mask_h, mask_w):  # downsample
@@ -103,11 +111,12 @@ class ComputeLoss:
             self.balance = [x / self.balance[self.ssi] for x in self.balance]
         lbox *= self.hyp["box"]
         lobj *= self.hyp["obj"]
-        lcls *= self.hyp["cls"]
+        lcls1 *= self.hyp["cls"]
+        lcls2 *= self.hyp["cls"]
         lseg *= self.hyp["box"] / bs
 
-        loss = lbox + lobj + lcls + lseg
-        return loss * bs, torch.cat((lbox, lseg, lobj, lcls)).detach()
+        loss = lbox + lobj + lcls1 + lcls2 + lseg
+        return loss * bs, torch.cat((lbox, lseg, lobj, lcls1, lcls2)).detach()
 
     def single_mask_loss(self, gt_mask, pred, proto, xyxy, area):
         # Mask loss for one image
@@ -118,8 +127,8 @@ class ComputeLoss:
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
-        tcls, tbox, indices, anch, tidxs, xywhn = [], [], [], [], [], []
-        gain = torch.ones(8, device=self.device)  # normalized to gridspace gain
+        tcls1, tcls2, tbox, indices, anch, tidxs, xywhn = [], [], [], [], [], [], []
+        gain = torch.ones(9, device=self.device)  # normalized to gridspace gain
         ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
         if self.overlap:
             batch = p[0].shape[0]
@@ -146,19 +155,19 @@ class ComputeLoss:
 
         for i in range(self.nl):
             anchors, shape = self.anchors[i], p[i].shape
-            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            gain[3:7] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
 
             # Match targets to anchors
             t = targets * gain  # shape(3,n,7)
             if nt:
                 # Matches
-                r = t[..., 4:6] / anchors[:, None]  # wh ratio
+                r = t[..., 5:7] / anchors[:, None]  # wh ratio
                 j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[j]  # filter
 
                 # Offsets
-                gxy = t[:, 2:4]  # grid xy
+                gxy = t[:, 3:5]  # grid xy
                 gxi = gain[[2, 3]] - gxy  # inverse
                 j, k = ((gxy % 1 < g) & (gxy > 1)).T
                 l, m = ((gxi % 1 < g) & (gxi > 1)).T
@@ -170,7 +179,12 @@ class ComputeLoss:
                 offsets = 0
 
             # Define
-            bc, gxy, gwh, at = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
+            bc = t[:, :2]
+            c2 = t[:, 2].long()
+            gxy = t[:, 3:5]
+            gwh = t[:, 5:7]
+            at = t[:, 7:9]
+            # bc, gxy, gwh, at = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
             (a, tidx), (b, c) = at.long().T, bc.long().T  # anchors, image, class
             gij = (gxy - offsets).long()
             gi, gj = gij.T  # grid indices
@@ -179,8 +193,9 @@ class ComputeLoss:
             indices.append((b, a, gj.clamp_(0, shape[2] - 1), gi.clamp_(0, shape[3] - 1)))  # image, anchor, grid
             tbox.append(torch.cat((gxy - gij, gwh), 1))  # box
             anch.append(anchors[a])  # anchors
-            tcls.append(c)  # class
+            tcls1.append(c)  # class
+            tcls2.append(c2)  # class
             tidxs.append(tidx)
-            xywhn.append(torch.cat((gxy, gwh), 1) / gain[2:6])  # xywh normalized
+            xywhn.append(torch.cat((gxy, gwh), 1) / gain[3:7])  # xywh normalized
 
-        return tcls, tbox, indices, anch, tidxs, xywhn
+        return tcls1, tcls2, tbox, indices, anch, tidxs, xywhn

@@ -234,7 +234,7 @@ def run(
                                   "mAP50", "mAP50-95)")
     dt = Profile(), Profile(), Profile()
     metrics = Metrics()
-    loss = torch.zeros(4, device=device)
+    loss = torch.zeros(5, device=device)
     jdict, stats = [], []
     # callbacks.run('on_val_start')
     pbar = tqdm(dataloader, desc=s, bar_format='{l_bar}{bar:10}{r_bar}{bar:-10b}')  # progress bar
@@ -259,6 +259,8 @@ def run(
             loss += compute_loss(train_out, targets, masks)[1]  # box, obj, cls
 
         # NMS
+        targets[:, 2:-1] = targets[:, 3:]
+        targets = targets[:, :-1]
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
         with dt[2]:

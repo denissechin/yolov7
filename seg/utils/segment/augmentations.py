@@ -96,9 +96,9 @@ def random_perspective(im,
             new_segments.append(xy)
 
         # filter candidates
-        i = box_candidates(box1=targets[:, 1:5].T * s, box2=new.T, area_thr=0.01)
+        i = box_candidates(box1=targets[:, 2:6].T * s, box2=new.T, area_thr=0.01)
         targets = targets[i]
-        targets[:, 1:5] = new[i]
+        targets[:, 2:6] = new[i]
         new_segments = np.array(new_segments)[i]
 
     return im, targets, new_segments
